@@ -71,7 +71,7 @@ def resample(image, scan, new_spacing=[1,1,1]):
     image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
     return image, new_spacing
 
-def plot_3d(image, threshold=-300):
+def plot_3d(image, threshold=-300, name):
     # Position the scan upright,
     # so the head of the patient would be at the top facing the camera
     p = image.transpose(2,1,0)
@@ -90,7 +90,8 @@ def plot_3d(image, threshold=-300):
     ax.set_xlim(0, p.shape[0])
     ax.set_ylim(0, p.shape[1])
     ax.set_zlim(0, p.shape[2])
-    plt.savefig("3d.png")
+
+    plt.savefig(name)
 
 def largest_label_volume(im, bg=-1):
     vals, counts = np.unique(im, return_counts=True)
@@ -141,22 +142,28 @@ def segment_lung_mask(image, fill_lung_structures=True):
     return binary_image
 
 def main():
-    first_patient = load_scan(INPUT_FOLDER + patients[1])
-    first_patient_pixels = get_pixels_hu(first_patient)
-    #plt.hist(first_patient_pixels.flatten(), bins=80, color='c')
-    #plt.xlabel("Hounsfield Units (HU)")
-    #plt.ylabel("Frequency")
-    #plt.show()
-    # Show some slice in the middle
-    plt.imshow(first_patient_pixels[80], cmap=plt.cm.gray)
-    #plt.show()
-    plt.savefig("2d.png")
-    pix_resampled, spacing = resample(first_patient_pixels, first_patient, [1,1,1])
-    #plot_3d(pix_resampled, 400)
-    segmented_lungs = segment_lung_mask(pix_resampled, False)
-    #segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
-    plot_3d(segmented_lungs, 0)
-    #plot_3d(segmented_lungs_fill, 0)
+    for patient in patients:
+        each_patient = load_scan(INPUT_FOLDER + patient)
+        each_patient_pixels = get_pixels_hu(first_patient)
+
+        print (patient)
+
+        #plt.hist(first_patient_pixels.flatten(), bins=80, color='c')
+        #plt.xlabel("Hounsfield Units (HU)")
+        #plt.ylabel("Frequency")
+        #plt.show()
+        # Show some slice in the middle
+        plt.imshow(each_patient_pixels[80], cmap=plt.cm.gray)
+        #plt.show()
+        plt.savefig(INPUT_FOLDER + patient + "/2d.png")
+        pix_resampled, spacing = resample(each_patient_pixels, each_patient, [1,1,1])
+
+        segmented_lungs = segment_lung_mask(pix_resampled, False)
+        segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
+
+        plot_3d(segmented_lungs, 0, "segmented_lungs.png")
+        plot_3d(segmented_lungs_fill, 0, "segmented_lungs_fill.png")
+        plot_3d(segmented_lungs_fill - segmented_lungs, 0, "difference.png")
 
 if __name__ == "__main__":
     main()

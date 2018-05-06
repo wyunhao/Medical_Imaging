@@ -71,7 +71,7 @@ def resample(image, scan, new_spacing=[1,1,1]):
     image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest')
     return image, new_spacing
 
-def plot_3d(image, threshold=-300, name):
+def plot_3d(image, name, threshold=-300):
     # Position the scan upright,
     # so the head of the patient would be at the top facing the camera
     p = image.transpose(2,1,0)
@@ -161,9 +161,9 @@ def main():
         segmented_lungs = segment_lung_mask(pix_resampled, False)
         segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
 
-        plot_3d(segmented_lungs, 0, "segmented_lungs.png")
-        plot_3d(segmented_lungs_fill, 0, "segmented_lungs_fill.png")
-        plot_3d(segmented_lungs_fill - segmented_lungs, 0, "difference.png")
+        plot_3d(segmented_lungs, "segmented_lungs.png", 0)
+        plot_3d(segmented_lungs_fill, "segmented_lungs_fill.png", 0)
+        plot_3d(segmented_lungs_fill - segmented_lungs, "difference.png", 0)
 
 if __name__ == "__main__":
     main()

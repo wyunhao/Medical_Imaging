@@ -12,6 +12,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 INPUT_FOLDER = './sample_images/'
 patients = os.listdir(INPUT_FOLDER)
 patients.sort()
+patients.remove(".DS_Store")
 MIN_BOUND = -1000.0
 MAX_BOUND = 400.0
 PIXEL_MEAN = 0.25
@@ -28,7 +29,7 @@ def normalize(image):
 
 # Load the scans in given folder path
 def load_scan(path):
-    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path) if not s.startswith('.')]
+    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path) if not s.startswith('.') and not s.endswith('.png')]
     slices.sort(key = lambda x: float(x.ImagePositionPatient[2]))
     try:
         slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
@@ -144,26 +145,22 @@ def segment_lung_mask(image, fill_lung_structures=True):
 def main():
     for patient in patients:
         each_patient = load_scan(INPUT_FOLDER + patient)
-        each_patient_pixels = get_pixels_hu(first_patient)
+        each_patient_pixels = get_pixels_hu(each_patient)
 
-        print (patient)
-
-        #plt.hist(first_patient_pixels.flatten(), bins=80, color='c')
-        #plt.xlabel("Hounsfield Units (HU)")
-        #plt.ylabel("Frequency")
-        #plt.show()
-        # Show some slice in the middle
         plt.imshow(each_patient_pixels[80], cmap=plt.cm.gray)
-        #plt.show()
         plt.savefig(INPUT_FOLDER + patient + "/2d.png")
+
+    for patient in patients:
+        each_patient = load_scan(INPUT_FOLDER + patient)
+        each_patient_pixels = get_pixels_hu(each_patient)
         pix_resampled, spacing = resample(each_patient_pixels, each_patient, [1,1,1])
 
         segmented_lungs = segment_lung_mask(pix_resampled, False)
         segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
 
-        plot_3d(segmented_lungs, "segmented_lungs.png", 0)
-        plot_3d(segmented_lungs_fill, "segmented_lungs_fill.png", 0)
-        plot_3d(segmented_lungs_fill - segmented_lungs, "difference.png", 0)
+        plot_3d(segmented_lungs, INPUT_FOLDER + patient + "/segmented_lungs.png", 0)
+        plot_3d(segmented_lungs_fill, INPUT_FOLDER + patient + "/segmented_lungs_fill.png", 0)
+        plot_3d(segmented_lungs_fill - segmented_lungs, INPUT_FOLDER + patient + "/difference.png", 0)
 
 if __name__ == "__main__":
     main()

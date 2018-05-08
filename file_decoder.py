@@ -9,10 +9,13 @@ from skimage import measure, morphology
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 # Some constants 
-INPUT_FOLDER = './sample_images/'
+INPUT_FOLDER = './stage1/'
 patients = os.listdir(INPUT_FOLDER)
 patients.sort()
-patients.remove(".DS_Store")
+try:
+    patients.remove(".DS_Store")
+except:
+    None
 MIN_BOUND = -1000.0
 MAX_BOUND = 400.0
 PIXEL_MEAN = 0.25
@@ -93,6 +96,8 @@ def plot_3d(image, name, threshold=-300):
     ax.set_zlim(0, p.shape[2])
 
     plt.savefig(name)
+    plt.clf()
+    plt.close(fig)
 
 def largest_label_volume(im, bg=-1):
     vals, counts = np.unique(im, return_counts=True)
@@ -143,24 +148,34 @@ def segment_lung_mask(image, fill_lung_structures=True):
     return binary_image
 
 def main():
+    print ("2d start")
     for patient in patients:
-        each_patient = load_scan(INPUT_FOLDER + patient)
-        each_patient_pixels = get_pixels_hu(each_patient)
+        print ("2d: " + patient)
+        try:
+            each_patient = load_scan(INPUT_FOLDER + patient)
+            each_patient_pixels = get_pixels_hu(each_patient)
 
-        plt.imshow(each_patient_pixels[80], cmap=plt.cm.gray)
-        plt.savefig(INPUT_FOLDER + patient + "/2d.png")
+            plt.imshow(each_patient_pixels[80], cmap=plt.cm.gray)
+            plt.savefig(INPUT_FOLDER + patient + "/2d.png")
+        except:
+            print ("gg: " + patient)
 
+    print ("3d start")
     for patient in patients:
-        each_patient = load_scan(INPUT_FOLDER + patient)
-        each_patient_pixels = get_pixels_hu(each_patient)
-        pix_resampled, spacing = resample(each_patient_pixels, each_patient, [1,1,1])
+        print ("3d: " + patient)
+        try:
+            each_patient = load_scan(INPUT_FOLDER + patient)
+            each_patient_pixels = get_pixels_hu(each_patient)
+            pix_resampled, spacing = resample(each_patient_pixels, each_patient, [1,1,1])
 
-        segmented_lungs = segment_lung_mask(pix_resampled, False)
-        segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
+            segmented_lungs = segment_lung_mask(pix_resampled, False)
+            segmented_lungs_fill = segment_lung_mask(pix_resampled, True)
 
-        plot_3d(segmented_lungs, INPUT_FOLDER + patient + "/segmented_lungs.png", 0)
-        plot_3d(segmented_lungs_fill, INPUT_FOLDER + patient + "/segmented_lungs_fill.png", 0)
-        plot_3d(segmented_lungs_fill - segmented_lungs, INPUT_FOLDER + patient + "/difference.png", 0)
+            plot_3d(segmented_lungs, INPUT_FOLDER + patient + "/segmented_lungs.png", 0)
+            plot_3d(segmented_lungs_fill, INPUT_FOLDER + patient + "/segmented_lungs_fill.png", 0)
+            plot_3d(segmented_lungs_fill - segmented_lungs, INPUT_FOLDER + patient + "/difference.png", 0)
+        except:
+            print ("gg: " + patient)
 
 if __name__ == "__main__":
     main()

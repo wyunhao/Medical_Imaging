@@ -1,6 +1,6 @@
 import os
 
-INPUT_FOLDER = './sample_images/'
+INPUT_FOLDER = './stage1/'
 patients = os.listdir(INPUT_FOLDER)
 patients.sort()
 patients.remove(".DS_Store")

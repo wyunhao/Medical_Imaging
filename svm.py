@@ -1,48 +1,28 @@
 from string import punctuation
 
 import numpy as np
-from PIL import Image
 import os
 import pandas as pd
+import dicom
+import matplotlib.pyplot as plt
+import cv2
+import scipy.ndimage
 
 from sklearn.svm import SVC
 from sklearn.cross_validation import StratifiedKFold
 from sklearn import metrics
 from sklearn.metrics import confusion_matrix
+from skimage import morphology
+from skimage import measure
+from skimage.transform import resize
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from PIL import Image
 
-data_dir = "stage1/"
+data_dir = "sample_images/"
 patients = [f for f in os.listdir(data_dir) if not f.startswith('.')]
 labels = pd.read_csv('./stage1_labels.csv', index_col=0)
-######################################################################
-# functions -- input
-######################################################################
-def generate_support_vector(patient):
-    col = Image.open(data_dir + patient + "/2d.png")
-    gray = col.convert('L')
-
-    # Let numpy do the heavy lifting for converting pixels to pure black or white
-    bw = np.asarray(gray).copy()
-    sum = 0
-    cnt = 0
-    for r in bw:
-        for c in r:
-            if c != 255:
-                sum += c
-                cnt += 1
-    avg = sum / cnt
-    
-    # Pixel range is 0...255
-    bw[bw < avg] = 0    # Black
-    bw[bw >= avg] = 1   # White
-    return bw.flatten()
-    #convert rgb vector into supportvector array for SVM
-    #supportVector = np.zeros(shape = (len(bw),len(bw[0])))
-    #for i in range(len(bw)):
-    #    for j in range(len(bw[r])):
-    #        if bw[i][j] == 0:
-    #            supportVector[i][j] = 1
-    #return supportVector
-
+n_clusters = 40
 
 ######################################################################
 # functions -- evaluation
@@ -114,7 +94,7 @@ def cv_performance(clf, X, y, kf, metric="accuracy"):
         temp_clf = clf
         temp_clf.fit(X_train, y_train)
         y_pred = temp_clf.decision_function(X_test)
-        print(y_pred)
+        #print(y_pred)
         score = performance(y_test,y_pred,metric=metric)
         scores.append(score)
 
@@ -211,46 +191,238 @@ def performance_test(clf, X, y, metric="accuracy"):
     """
 
     y_pred = clf.decision_function(X)
+    print(y_pred)
     score = performance(y,y_pred,metric=metric)
     return score
 
+######################################################################
+# lung segment
+######################################################################
+def load_scan(path):
+    slices = [dicom.read_file(path + '/' + s) for s in os.listdir(path) if not s.startswith('.') and not s.endswith('.npy')]
+    slices.sort(key = lambda x: int(x.InstanceNumber))
+    try:
+        slice_thickness = np.abs(slices[0].ImagePositionPatient[2] - slices[1].ImagePositionPatient[2])
+    except:
+        slice_thickness = np.abs(slices[0].SliceLocation - slices[1].SliceLocation)
+    for s in slices:
+        s.SliceThickness = slice_thickness
+    return slices
+
+def get_pixels_hu(scans):
+    image = np.stack([s.pixel_array for s in scans])
+    # Convert to int16 (from sometimes int16),
+    # should be possible as values should always be low enough (<32k)
+    image = image.astype(np.int16)
+    # Set outside-of-scan pixels to 1
+    # The intercept is usually -1024, so air is approximately 0
+    image[image == -2000] = 0
+    # Convert to Hounsfield units (HU)
+    intercept = scans[0].RescaleIntercept
+    slope = scans[0].RescaleSlope
+    if slope != 1:
+        image = slope * image.astype(np.float64)
+        image = image.astype(np.int16)
+    image += np.int16(intercept)
+    return np.array(image, dtype=np.int16)
+
+def sample_stack(patient,stack, start_with, show_every):
+    for i in range(6):
+        ind = start_with + i*show_every
+        plt.imsave(data_dir+patient+'/'+str(i+1)+'.png',stack[ind],cmap='gray')
+
+def resample(image, scan, new_spacing=[1,1,1]):
+    # Determine current pixel spacing
+    spacing = map(float, ([scan[0].SliceThickness] + scan[0].PixelSpacing))
+    spacing = np.array(list(spacing))
+
+    resize_factor = spacing / new_spacing
+    new_real_shape = image.shape * resize_factor
+    new_shape = np.round(new_real_shape)
+    real_resize_factor = new_shape / image.shape
+    new_spacing = spacing / real_resize_factor
+
+    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor)
+
+    return image, new_spacing
+
+#Standardize the pixel values                                                                                  
+def make_lungmask(img):
+    row_size= img.shape[0]
+    col_size = img.shape[1]
+
+    mean = np.mean(img)
+    std = np.std(img)
+    img = img-mean
+    img = img/std
+    # Find the average pixel value near the lungs
+    # to renormalize washed out images  
+    middle = img[int(col_size/5):int(col_size/5*4),int(row_size/5):int(row_size/5*4)]
+    mean = np.mean(middle)
+    max = np.max(img)
+    min = np.min(img)
+    # To improve threshold finding, I'm moving the
+    # underflow and overflow on the pixel spectrum
+    img[img==max]=mean
+    img[img==min]=mean
+    #
+    # Using Kmeans to separate foreground (soft tissue / bone) and background (lung/air)   
+    #                       
+    kmeans = KMeans(n_clusters=2).fit(np.reshape(middle,[np.prod(middle.shape),1]))
+    centers = sorted(kmeans.cluster_centers_.flatten())
+    threshold = np.mean(centers)
+    thresh_img = np.where(img<threshold,1.0,0.0)  # threshold the image
+
+    # First erode away the finer elements, then dilate to include some of the pixels surrounding the lung.
+    # We don't want to accidentally clip the lung.
+    eroded = morphology.erosion(thresh_img,np.ones([9,9]))
+    dilation = morphology.dilation(eroded,np.ones([4,4]))
+
+    labels = measure.label(dilation) # Different labels are displayed in different colors
+    #labels = measure.label(eroded)
+    label_vals = np.unique(labels)
+    regions = measure.regionprops(labels)
+    good_labels = []
+    for prop in regions:
+        B = prop.bbox
+        if B[2]-B[0]<row_size/10*9 and B[3]-B[1]<col_size/10*9 and B[0]>row_size/10 and B[2]<col_size/10*9:
+            good_labels.append(prop.label)
+    mask = np.ndarray([row_size,col_size],dtype=np.int8)
+    mask[:] = 0
+    #
+    #  After ju≈st the lungs are left, we do another large dilation
+    #  in order to fill in and out the lung mask
+    #
+    for N in good_labels:
+        mask = mask + np.where(labels==N,1,0)
+    mask = morphology.dilation(mask,np.ones([10,10])) # one last dilation 
+    return mask*img
+
+######################################################################
+# sift
+######################################################################
+def scale(histogram):
+    sum = np.sum(histogram)
+    for i in range(len(histogram)):
+        histogram[i] = histogram[i]/sum * 100
+    return histogram
+
+def sift(img,sift):
+    kp, des = sift.detectAndCompute(img,None)
+    vStack = np.array(des)
+    for remaining in des:
+        vStack = np.vstack((vStack, remaining))
+    descriptor_vstack = vStack.copy()
+
+    kmeans_obj = KMeans(n_clusters = n_clusters)
+    kmeans_ret = kmeans_obj.fit_predict(descriptor_vstack)
+
+    mega_histogram = np.array(np.zeros(n_clusters))
+    l = len(des)
+    for j in range(l):
+        idx = kmeans_ret[j]
+        mega_histogram[idx] += 1
+    return scale(mega_histogram)
+
+######################################################################
+# gabor filter
+######################################################################
+
+# define gabor filter bank with different orientations and at different scales
+def build_filters():
+    filters = []
+    ksize = 9
+    #define the range for theta and nu
+    for theta in np.arange(0, np.pi, np.pi / 8):
+        for nu in np.arange(0, 6*np.pi/4 , np.pi / 4):
+            kern = cv2.getGaborKernel((ksize, ksize), 1.0, theta, nu, 0.5, 0, ktype=cv2.CV_32F)
+            kern /= 1.5*kern.sum()
+            filters.append(kern)
+    return filters
+
+#function to convolve the image with the filters
+def process(img, filters):
+    accum = np.zeros_like(img)
+    for kern in filters:
+        fimg = cv2.filter2D(img, cv2.CV_8UC3, kern)
+        np.maximum(accum, fimg, accum)
+    return accum
+
+def garbor(imgg, filters):
+    f = np.asarray(filters)
+    #initializing the feature vector
+    feat = []
+    #calculating the local energy for each convolved image
+    for j in range(40):
+        res = process(imgg, f[j])
+        temp = 0
+        for p in range(128):
+            for q in range(128):
+                temp = temp + res[p][q]*res[p][q]
+        feat.append(temp)
+    #calculating the mean amplitude for each convolved image
+    for j in range(40):
+        res = process(imgg, f[j])
+        temp = 0
+        for p in range(128):
+            for q in range(128):
+                temp = temp + abs(res[p][q])
+        feat.append(temp)
+    return feat
 
 ######################################################################
 # main
 ######################################################################
  
-def main() :
+def main():
     np.random.seed(1234)
-    
-    # read the images and their labels   
-    X = np.zeros(shape=(502,480*640))
+    index=0
+    X = np.zeros(shape=(19,120))
     y = []
-    count = 0
     for num,patient in enumerate(patients):
         print (patient)
-        try:
-            label = labels.get_value(patient, 'cancer')
-            if label == 0:
-                label = -1
-            sv = generate_support_vector(patient)
-            y.append(label)
-            X[count] = sv
-            count += 1
-        except:
-            print ("fail: " + patient)
+        label = labels.get_value(patient, 'cancer')
+        if label == 0:
+            label = -1
+        scans = load_scan(data_dir+patient)
+        imgs = get_pixels_hu(scans)
+        np.save(data_dir+patient+"/%s.npy" % (patient), imgs)
+        imgs_to_process = np.load(data_dir+patient+"/%s.npy" % (patient))
+        imgs_after_resamp, spacing = resample(imgs_to_process, scans, [1,1,1])
+        masked_lung = []
+        count = 0
+        for img in imgs_after_resamp:
+            try:
+                masked_lung.append(make_lungmask(img))
+                count+=1
+            except:
+                print(patient + ": masked lung exception")
+        sample_stack(patient,masked_lung,int(count/4),int(count/10))
+        os.system("rm -rf " + data_dir+patient+"/*.npy")
+        SIFT = cv2.xfeatures2d.SIFT_create()
+        filters = build_filters()
+        sv = [0] * 120
+        for i in range(6):
+            img = cv2.imread(data_dir+patient+'/'+str(i+1)+'.png')
+            imgg = cv2.imread(data_dir+patient+'/'+str(i+1)+'.png',0)
+            vec = np.append(sift(img,SIFT),garbor(imgg,filters))
+            sv = [sv[j]+vec[j] for j in range(120)]
+        sv = [sv[i]/6 for i in range(120)]
+        y.append(label)
+        X[index] = sv
+        index += 1
     y = np.asarray(y)
-    
-    train_x = X[0:450]
-    test_x = X[450:]
-    train_y = y[0:450]
-    test_y = y[450:]
+    train_x = X[0:15]
+    test_x = X[15:]
+    train_y = y[0:15]
+    test_y = y[15:]
     kf=StratifiedKFold(train_y, n_folds=5)
 
     best_accuracy = select_param_linear(train_x, train_y, kf,metric='accuracy')
-    print ("best: "+str(best_accuracy))
-    
+    print ("best linear: "+str(best_accuracy))
     best_accuracy = select_param_rbf(train_x, train_y, kf,metric='accuracy')
-    print ("best: "+str(best_accuracy))
+    print ("best rbf: "+str(best_accuracy))
+
     """
     clf_linear = SVC(C=10, kernel='linear')
     clf_linear.fit(train_x, train_y)

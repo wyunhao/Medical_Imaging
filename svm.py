@@ -227,7 +227,7 @@ def get_pixels_hu(scans):
     return np.array(image, dtype=np.int16)
 
 def sample_stack(patient,stack, start_with, show_every):
-    for i in range(6):
+    for i in range(5):
         ind = start_with + i*show_every
         plt.imsave(data_dir+patient+'/'+str(i+1)+'.png',stack[ind],cmap='gray')
 
@@ -402,12 +402,12 @@ def main():
         SIFT = cv2.xfeatures2d.SIFT_create()
         filters = build_filters()
         sv = [0] * 120
-        for i in range(6):
+        for i in range(5):
             img = cv2.imread(data_dir+patient+'/'+str(i+1)+'.png')
             imgg = cv2.imread(data_dir+patient+'/'+str(i+1)+'.png',0)
             vec = np.append(sift(img,SIFT),garbor(imgg,filters))
             sv = [sv[j]+vec[j] for j in range(120)]
-        sv = [sv[i]/6 for i in range(120)]
+        sv = [sv[i]/5 for i in range(120)]
         y.append(label)
         X[index] = sv
         index += 1

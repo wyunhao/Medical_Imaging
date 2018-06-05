@@ -7,6 +7,7 @@ import dicom
 import matplotlib.pyplot as plt
 import cv2
 import scipy.ndimage
+import csv
 
 from sklearn.svm import SVC
 from sklearn.cross_validation import StratifiedKFold
@@ -19,11 +20,24 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from PIL import Image
 
-data_dir = "sample_images/"
-patients = [f for f in os.listdir(data_dir) if not f.startswith('.')]
+data_dir = "stage1/"
+masked_dir = "masked/"
+patients = [f for f in os.listdir(masked_dir) if not f.startswith('.')]
 labels = pd.read_csv('./stage1_labels.csv', index_col=0)
-n_clusters = 40
+garbor_reader = csv.reader(open("garbor.csv","r"))
+garbor_rows = []
+for row in garbor_reader:
+    garbor_rows.append(row)
 
+"""
+best_linear_n_clusters = 0
+best_linear_score = 0
+best_linear_C = 0
+best_rbf_n_clusters = 0
+best_rbf_score = 0
+best_rbf_C = 0
+best_rbf_gamma = 0
+"""
 ######################################################################
 # functions -- evaluation
 ######################################################################
@@ -45,6 +59,13 @@ def performance(y_true, y_pred, metric="accuracy"):
     --------------------
         measure  -- float, performance measure
     """
+    flag = True
+    for i in y_pred:
+        if i > 0:
+            flag = False
+            break
+    if flag:
+        return 0
     y_label = np.sign(y_pred)
     y_label[y_label==0] = 1
     measure = 0
@@ -63,7 +84,6 @@ def performance(y_true, y_pred, metric="accuracy"):
         elif metric == 'specificity':
             measure = cm[1,1]/(cm[1,0]+cm[1,1])
     return measure
-
 
 def cv_performance(clf, X, y, kf, metric="accuracy"):
     """
@@ -94,7 +114,6 @@ def cv_performance(clf, X, y, kf, metric="accuracy"):
         temp_clf = clf
         temp_clf.fit(X_train, y_train)
         y_pred = temp_clf.decision_function(X_test)
-        #print(y_pred)
         score = performance(y_test,y_pred,metric=metric)
         scores.append(score)
 
@@ -130,8 +149,7 @@ def select_param_linear(X, y, kf, metric="accuracy"):
         print(str(c) + ":" + str(score))
         scores.append(score)
     best = np.max(scores)
-    return C_range[scores.index(best)]
-
+    return C_range[scores.index(best)], best
 
 def select_param_rbf(X, y, kf, metric="accuracy"):
     """
@@ -192,6 +210,23 @@ def performance_test(clf, X, y, metric="accuracy"):
 
     y_pred = clf.decision_function(X)
     print(y_pred)
+
+    y_label = np.sign(y_pred)
+    y_label[y_label==0] = 1
+    fpr, tpr, threshold = metrics.roc_curve(y, y_label)
+    roc_auc = metrics.auc(fpr, tpr)
+
+    # method I: plt
+    plt.title('Receiver Operating Characteristic')
+    plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % roc_auc)
+    plt.legend(loc = 'lower right')
+    plt.plot([0, 1], [0, 1],'r--')
+    plt.xlim([0, 1])
+    plt.ylim([0, 1])
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    plt.show()
+
     score = performance(y,y_pred,metric=metric)
     return score
 
@@ -307,7 +342,7 @@ def scale(histogram):
         histogram[i] = histogram[i]/sum * 100
     return histogram
 
-def sift(img,sift):
+def sift(img,sift,n_clusters):
     kp, des = sift.detectAndCompute(img,None)
     vStack = np.array(des)
     for remaining in des:
@@ -356,26 +391,32 @@ def garbor(imgg, filters):
     for j in range(40):
         res = process(imgg, f[j])
         temp = 0
-        for p in range(128):
-            for q in range(128):
+        for p in range(480):
+            for q in range(640):
                 temp = temp + res[p][q]*res[p][q]
         feat.append(temp)
     #calculating the mean amplitude for each convolved image
     for j in range(40):
         res = process(imgg, f[j])
         temp = 0
-        for p in range(128):
-            for q in range(128):
+        for p in range(480):
+            for q in range(640):
                 temp = temp + abs(res[p][q])
         feat.append(temp)
     return feat
+
+def get_garbor_sv(patient):
+    for row in garbor_rows:
+        if patient == row[0]:
+            return np.asarray(list(map(int,row[1:])))
 
 ######################################################################
 # main
 ######################################################################
  
-def main():
+def main(best_linear_n_clusters, best_linear_score, best_linear_C, best_rbf_n_clusters, best_rbf_score, best_rbf_C, best_rbf_gamma):
     np.random.seed(1234)
+    """
     index=0
     X = np.zeros(shape=(19,120))
     y = []
@@ -411,52 +452,143 @@ def main():
         y.append(label)
         X[index] = sv
         index += 1
-    y = np.asarray(y)
-    train_x = X[0:15]
-    test_x = X[15:]
-    train_y = y[0:15]
-    test_y = y[15:]
-    kf=StratifiedKFold(train_y, n_folds=5)
-
-    best_accuracy = select_param_linear(train_x, train_y, kf,metric='accuracy')
-    print ("best linear: "+str(best_accuracy))
-    best_accuracy = select_param_rbf(train_x, train_y, kf,metric='accuracy')
-    print ("best rbf: "+str(best_accuracy))
-
     """
-    clf_linear = SVC(C=10, kernel='linear')
-    clf_linear.fit(train_x, train_y)
-    clf_rbf = SVC(C=100,gamma=0.01,kernel='rbf')
-    clf_rbf.fit(train_x, train_y)
+
+    for n_features in range(5,10):
+        print(n_features)   
+        index=0
+        X = np.zeros(shape=(478,n_features+80))
+        y = []
+    #writer = csv.writer(open("sv.csv","w"))
+        for num,patient in enumerate(patients):
+            try:
+                label = labels.get_value(patient[:-4], 'cancer')
+                if label == 0:
+                    label = -1
+                #print (label)
+                SIFT = cv2.xfeatures2d.SIFT_create()
+                #filters = build_filters()
+                img = cv2.imread(masked_dir+patient)
+                sift_sv = sift(img,SIFT,n_features)
+                garbor_sv = get_garbor_sv(patient[:-4])
+                sv = np.append(sift_sv,garbor_sv)
+                #writer.writerow(sv)
+                y.append(label)
+                X[index] = sv
+                index += 1
+            except:
+                print(patient)
+        means = np.mean(X, axis = 0)
+        vars = np.var(X, axis = 0)
+        X = (X - means) / vars
+        X = np.nan_to_num(X)
+        y = np.asarray(y)
+        train_x = X[0:430]
+        test_x = X[430:]
+        train_y = y[0:430]
+        test_y = y[430:]
+        kf=StratifiedKFold(train_y, n_folds=5)
     
-    accuracy = performance_test(clf_linear, test_x, test_y, metric='accuracy')
-    f1 = performance_test(clf_linear, test_x, test_y, metric='f1-score')
-    auroc = performance_test(clf_linear, test_x, test_y, metric='auroc')
-    precision = performance_test(clf_linear, test_x, test_y, metric='precision')
-    sensitivity = performance_test(clf_linear, test_x, test_y, metric='sensitivity')
-    specificity = performance_test(clf_linear, test_x, test_y, metric='specificity')
-    print ("linear SVC performance")
-    print (accuracy)
-    print (f1)
-    print (auroc)
-    print (precision)
-    print (sensitivity)
-    print (specificity)
+        best_c, best_score = select_param_linear(train_x, train_y, kf,metric='accuracy')
+        if best_score > best_linear_score:
+            best_linear_n_clusters = n_features
+            best_linear_score = best_score
+            best_linear_C = best_c
+            print("new best linear score "+str(best_score))
+        
+        best_c, best_gamma, best_score = select_param_rbf(train_x, train_y, kf,metric='accuracy')
+        if best_score > best_rbf_score:
+            best_rbf_n_clusters = n_features
+            best_rbf_score = best_score
+            best_rbf_C = best_c
+            best_rbf_gamma = best_gamma
+            print("new best rbf score "+str(best_score))
     
-    accuracy = performance_test(clf_rbf, test_x, test_y, metric='accuracy')
-    f1 = performance_test(clf_rbf, test_x, test_y, metric='f1-score')
-    auroc = performance_test(clf_rbf, test_x, test_y, metric='auroc')
-    precision = performance_test(clf_rbf, test_x, test_y, metric='precision')
-    sensitivity = performance_test(clf_rbf, test_x, test_y, metric='sensitivity')
-    specificity = performance_test(clf_rbf, test_x, test_y, metric='specificity')
-    print ("rbf SVC performance")
-    print (accuracy)
-    print (f1)
-    print (auroc)
-    print (precision)
-    print (sensitivity)
-    print (specificity)
-    """
+    #final linear model
+    if (best_linear_n_clusters != 0):
+        print ("creating final linear model")
+        print (best_linear_n_clusters)
+        print (best_linear_score)
+        print (best_linear_C)
+        index=0
+        X = np.zeros(shape=(478,best_linear_n_clusters+80))
+        y = []
+        for num,patient in enumerate(patients):
+            try:
+                label = labels.get_value(patient[:-4], 'cancer')
+                if label == 0:
+                    label = -1  
+                SIFT = cv2.xfeatures2d.SIFT_create()
+                #filters = build_filters()
+                img = cv2.imread(masked_dir+patient)
+                sift_sv = sift(img,SIFT,best_linear_n_clusters)
+                garbor_sv = get_garbor_sv(patient[:-4])
+                sv = np.append(sift_sv,garbor_sv)
+                y.append(label)
+                X[index] = sv
+                index += 1
+            except:
+                print(patient)
+        means = np.mean(X, axis = 0)
+        vars = np.var(X, axis = 0)
+        X = (X - means) / vars
+        X = np.nan_to_num(X)
+        y = np.asarray(y)
+        train_x = X[0:430]
+        test_x = X[430:]
+        train_y = y[0:430]
+        test_y = y[430:]
+
+        clf_linear = SVC(C=best_linear_C, kernel='linear')
+        clf_linear.fit(train_x, train_y)
+        accuracy = performance_test(clf_linear, test_x, test_y, metric='accuracy')
+        print ("linear SVC performance")
+        print (accuracy)
+    
+    #final rbf model
+    if (best_rbf_n_clusters != 0):
+        print ("creating final rbf model")
+        print (best_rbf_n_clusters)
+        print (best_rbf_score)
+        print (best_rbf_C)
+        print (best_rbf_gamma)
+        index=0
+        X = np.zeros(shape=(478,best_rbf_n_clusters+80))
+        y = []
+        #writer = csv.writer(open("garbor.csv","w"))
+        for num,patient in enumerate(patients):
+            try:
+                #print (patient)
+                label = labels.get_value(patient[:-4], 'cancer')
+                if label == 0:
+                    label = -1
+                SIFT = cv2.xfeatures2d.SIFT_create()
+                #filters = build_filters()
+                img = cv2.imread(masked_dir+patient)
+                sift_sv = sift(img,SIFT,best_rbf_n_clusters)
+                garbor_sv = get_garbor_sv(patient[:-4])
+                sv = np.append(sift_sv,garbor_sv)
+                #writer.writerow(sv[-80:])
+                y.append(label)
+                X[index] = sv
+                index += 1
+            except:
+                print(patient)
+        means = np.mean(X, axis = 0)
+        vars = np.var(X, axis = 0)
+        X = (X - means) / vars
+        X = np.nan_to_num(X)
+        y = np.asarray(y)
+        train_x = X[0:430]
+        test_x = X[430:]
+        train_y = y[0:430]
+        test_y = y[430:]
+
+        clf_rbf = SVC(C=best_rbf_C,gamma=best_rbf_gamma,kernel='rbf')
+        clf_rbf.fit(train_x, train_y)
+        accuracy = performance_test(clf_rbf, test_x, test_y, metric='accuracy')
+        print ("rbf SVC performance")
+        print (accuracy)
     
 if __name__ == "__main__" :
-    main()
+    main(0, 0, 0, 0, 0, 0, 0)
